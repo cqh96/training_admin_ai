@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PPT转视频工具</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+        }
+
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 28px;
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        input[type="file"] {
+            width: 100%;
+            padding: 15px;
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            background: #f9f9f9;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        input[type="file"]:hover {
+            border-color: #667eea;
+            background: #f0f0ff;
+        }
+
+        button {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            display: none;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .success {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            display: none;
+            word-break: break-all;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎬 PPT转视频工具</h1>
+        
+        <form id="pptForm">
+            <div class="form-group">
+                <label for="file">选择PPT文件 (.ppt, .pptx)</label>
+                <input type="file" 
+                       id="file" 
+                       name="file" 
+                       accept=".ppt,.pptx" 
+                       required>
+            </div>
+
+            <button type="submit" id="submitBtn">🚀 开始转换并下载</button>
+        </form>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>正在转换中，请稍候...</p>
+            <p style="font-size: 12px; color: #666; margin-top: 5px;">（转换可能需要几分钟，完成后会自动下载）</p>
+        </div>
+
+        <div class="success" id="success"></div>
+        <div class="error" id="error"></div>
+    </div>
+
+    <script>
+        document.getElementById('pptForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const submitBtn = document.getElementById('submitBtn');
+            const loading = document.getElementById('loading');
+            const success = document.getElementById('success');
+            const error = document.getElementById('error');
+            const fileInput = document.getElementById('file');
+            
+            if (fileInput.files.length === 0) {
+                alert('请选择一个PPT文件');
+                return;
+            }
+
+            submitBtn.disabled = true;
+            loading.style.display = 'block';
+            success.style.display = 'none';
+            error.style.display = 'none';
+
+            try {
+                const formData = new FormData();
+                formData.append('file', fileInput.files[0]);
+
+                const response = await fetch('http://localhost:8080/api/ppt/to-video', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    // 获取文件名
+                    let filename = 'video.mp4';
+                    const disposition = response.headers.get('Content-Disposition');
+                    if (disposition && disposition.indexOf('attachment') !== -1) {
+                        const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
+                        const matches = filenameRegex.exec(disposition);
+                        if (matches != null && matches[1]) { 
+                            filename = decodeURIComponent(matches[1].replace(/['"]/g, ''));
+                        }
+                    }
+
+                    // 获取Blob数据
+                    const blob = await response.blob();
+                    
+                    // 创建下载链接
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    
+                    // 清理
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+
+                    success.innerHTML = `
+                        <strong>✅ 视频生成成功！</strong><br><br>
+                        已自动开始下载 <strong>${filename}</strong><br>
+                        <small>如果下载没有开始，请检查浏览器拦截设置。</small>
+                    `;
+                    success.style.display = 'block';
+                } else {
+                    let errorMessage = '转换失败';
+                    try {
+                        const errorText = await response.text();
+                        // 尝试提取简单的错误信息
+                        errorMessage = errorText || response.statusText;
+                    } catch (e) {
+                        errorMessage = response.statusText;
+                    }
+                    throw new Error(errorMessage);
+                }
+            } catch (err) {
+                error.innerHTML = `<strong>❌ 错误：</strong> ${err.message}`;
+                error.style.display = 'block';
+            } finally {
+                submitBtn.disabled = false;
+                loading.style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>

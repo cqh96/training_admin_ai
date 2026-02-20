@@ -46,19 +46,36 @@ public class PptController {
     }
 
     @PostMapping("/to-video")
-    public ResponseEntity<String> pptToVideo(@RequestParam("file") MultipartFile file) {
+    public ResponseEntity<org.springframework.core.io.Resource> pptToVideo(@RequestParam("file") MultipartFile file) {
         log.info("收到PPT转视频请求: {}", file.getOriginalFilename());
         try {
             String videoPath = pptToVideoService.generateVideoFromPpt(file);
-            return ResponseEntity.ok(videoPath);
+            java.io.File videoFile = new java.io.File(videoPath);
+            
+            if (!videoFile.exists()) {
+                return ResponseEntity.internalServerError().body(new ByteArrayResource(("视频生成失败: 文件不存在 " + videoPath).getBytes()));
+            }
+
+            org.springframework.core.io.Resource resource = new org.springframework.core.io.FileSystemResource(videoFile);
+            
+            String originalFilename = file.getOriginalFilename();
+            String videoFilename = (originalFilename != null ? originalFilename.substring(0, originalFilename.lastIndexOf(".")) : "video") + ".mp4";
+            String encodedFilename = URLEncoder.encode(videoFilename, StandardCharsets.UTF_8).replace("+", "%20");
+
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + encodedFilename + "\"")
+                    .contentType(MediaType.parseMediaType("video/mp4"))
+                    .contentLength(videoFile.length())
+                    .body(resource);
+                    
         } catch (IOException e) {
             log.error("PPT转视频失败", e);
-            return ResponseEntity.internalServerError().body("视频生成失败: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(new ByteArrayResource(("视频生成失败: " + e.getMessage()).getBytes()));
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body("请求参数错误: " + e.getMessage());
+            return ResponseEntity.badRequest().body(new ByteArrayResource(("请求参数错误: " + e.getMessage()).getBytes()));
         } catch (Exception e) {
             log.error("PPT转视频发生未知错误", e);
-            return ResponseEntity.internalServerError().body("视频生成失败: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(new ByteArrayResource(("视频生成失败: " + e.getMessage()).getBytes()));
         }
     }
 
