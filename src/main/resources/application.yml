@@ -1,0 +1,132 @@
+spring:
+  application:
+    name: training-admin-ai
+  profiles:
+    active: dev
+
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/yzx_manage_telecom?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: root
+    password: 123456
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password:
+      database: 0
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+          max-wait: -1ms
+      timeout: 3000ms
+
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.MySQLDialect
+    open-in-view: false
+
+  cache:
+    type: redis
+    redis:
+      time-to-live: 3600000
+
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+    tags:
+      application: ${spring.application.name}
+
+logging:
+  charset:
+    console: UTF-8
+    file: UTF-8
+  level:
+    root: INFO
+    com.training.ai: DEBUG
+    org.springframework.security: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n"
+  file:
+    name: logs/training-admin-ai.log
+
+jwt:
+  secret: your-secret-key-must-be-at-least-256-bits-long-for-hs256-algorithm
+  expiration: 86400000
+  refresh-expiration: 604800000
+
+ai:
+  openai:
+    api-key: your-openai-api-key
+    api-url: https://api.openai.com/v1
+    timeout: 30000
+  qwen:
+    api-key: your-qwen-api-key
+    api-url: https://dashscope.aliyuncs.com/api/v1
+    timeout: 30000
+  bigmodel:
+    api-key: 3326261471714f49a60d6b533b5be916.gNEEjfDg1sNcxZKW
+    api-url: https://open.bigmodel.cn
+    timeout: 30000
+
+feign:
+  client:
+    config:
+      default:
+        connect-timeout: 5000
+        read-timeout: 30000
+        logger-level: basic
+  compression:
+    request:
+      enabled: true
+    response:
+      enabled: true
+
+jodconverter:
+  local:
+    enabled: true
+    # LibreOffice 安装路径
+    office-home: D:/devtool/LibreOffice
+    # 使用单个端口，避免并发问题
+    port-numbers: 2002,2003
+    # 增加任务执行超时（毫秒）
+    task-execution-timeout: 300000
+    # 任务队列超时
+    task-queue-timeout: 60000
+    # 进程看管超时
+    process-timeout: 120000
+    # 最大并发任务数
+    max-tasks-per-process: 10
