@@ -92,25 +92,69 @@
             transform: none;
         }
 
-        .loading {
-            text-align: center;
-            padding: 20px;
+        .progress-container {
+            margin-top: 25px;
             display: none;
         }
 
-        .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 15px;
+        .progress-bar-bg {
+            background: #e9ecef;
+            border-radius: 10px;
+            height: 20px;
+            overflow: hidden;
+            margin-bottom: 10px;
         }
 
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        .progress-bar {
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            height: 100%;
+            width: 0%;
+            color: white;
+            font-size: 12px;
+            line-height: 20px;
+            text-align: center;
+            transition: width 0.3s ease;
+        }
+
+        .status-text {
+            font-size: 14px;
+            color: #666;
+            text-align: center;
+            margin-bottom: 15px;
+        }
+
+        .logs-container {
+            margin-top: 20px;
+            border: 1px solid #eee;
+            border-radius: 8px;
+            background: #f8f9fa;
+            display: none;
+        }
+
+        .logs-header {
+            padding: 10px 15px;
+            border-bottom: 1px solid #eee;
+            font-weight: 600;
+            color: #555;
+            font-size: 14px;
+            background: #f1f3f5;
+            border-radius: 8px 8px 0 0;
+        }
+
+        .logs-content {
+            height: 150px;
+            overflow-y: auto;
+            padding: 10px 15px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 12px;
+            color: #333;
+            line-height: 1.5;
+        }
+
+        .logs-content p {
+            margin-bottom: 4px;
+            border-bottom: 1px dashed #eee;
+            padding-bottom: 2px;
         }
 
         .success {
@@ -150,10 +194,18 @@
             <button type="submit" id="submitBtn">🚀 开始转换并下载</button>
         </form>
 
-        <div class="loading" id="loading">
-            <div class="spinner"></div>
-            <p>正在转换中，请稍候...</p>
-            <p style="font-size: 12px; color: #666; margin-top: 5px;">（转换可能需要几分钟，完成后会自动下载）</p>
+        <!-- 进度条区域 -->
+        <div class="progress-container" id="progressContainer">
+            <div class="progress-bar-bg">
+                <div class="progress-bar" id="progressBar" style="width: 0%">0%</div>
+            </div>
+            <div class="status-text" id="statusText">准备就绪...</div>
+        </div>
+
+        <!-- 日志区域 -->
+        <div class="logs-container" id="logsContainer">
+            <div class="logs-header">📜 处理日志</div>
+            <div class="logs-content" id="logsContent"></div>
         </div>
 
         <div class="success" id="success"></div>
@@ -165,7 +217,11 @@
             e.preventDefault();
             
             const submitBtn = document.getElementById('submitBtn');
-            const loading = document.getElementById('loading');
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progressBar');
+            const statusText = document.getElementById('statusText');
+            const logsContainer = document.getElementById('logsContainer');
+            const logsContent = document.getElementById('logsContent');
             const success = document.getElementById('success');
             const error = document.getElementById('error');
             const fileInput = document.getElementById('file');
@@ -175,70 +231,138 @@
                 return;
             }
 
+            // 重置UI
             submitBtn.disabled = true;
-            loading.style.display = 'block';
             success.style.display = 'none';
             error.style.display = 'none';
+            progressContainer.style.display = 'block';
+            logsContainer.style.display = 'block';
+            progressBar.style.width = '0%';
+            progressBar.innerText = '0%';
+            statusText.innerText = '正在上传文件...';
+            logsContent.innerHTML = '';
+
+            let taskId = null;
+            let pollInterval = null;
 
             try {
+                // 1. 上传文件并开启任务
                 const formData = new FormData();
                 formData.append('file', fileInput.files[0]);
 
-                const response = await fetch('http://localhost:8080/api/ppt/to-video', {
+                const uploadResponse = await fetch('http://localhost:8080/api/ppt/async/to-video', {
                     method: 'POST',
                     body: formData
                 });
 
-                if (response.ok) {
-                    // 获取文件名
-                    let filename = 'video.mp4';
-                    const disposition = response.headers.get('Content-Disposition');
-                    if (disposition && disposition.indexOf('attachment') !== -1) {
-                        const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
-                        const matches = filenameRegex.exec(disposition);
-                        if (matches != null && matches[1]) { 
-                            filename = decodeURIComponent(matches[1].replace(/['"]/g, ''));
-                        }
-                    }
-
-                    // 获取Blob数据
-                    const blob = await response.blob();
-                    
-                    // 创建下载链接
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = filename;
-                    document.body.appendChild(a);
-                    a.click();
-                    
-                    // 清理
-                    window.URL.revokeObjectURL(url);
-                    document.body.removeChild(a);
-
-                    success.innerHTML = `
-                        <strong>✅ 视频生成成功！</strong><br><br>
-                        已自动开始下载 <strong>${filename}</strong><br>
-                        <small>如果下载没有开始，请检查浏览器拦截设置。</small>
-                    `;
-                    success.style.display = 'block';
-                } else {
-                    let errorMessage = '转换失败';
-                    try {
-                        const errorText = await response.text();
-                        // 尝试提取简单的错误信息
-                        errorMessage = errorText || response.statusText;
-                    } catch (e) {
-                        errorMessage = response.statusText;
-                    }
-                    throw new Error(errorMessage);
+                if (!uploadResponse.ok) {
+                    throw new Error("上传失败: " + uploadResponse.statusText);
                 }
+
+                const uploadResult = await uploadResponse.json();
+                taskId = uploadResult.taskId;
+                
+                statusText.innerText = '上传成功，正在处理...';
+                
+                // 2. 轮询进度
+                pollInterval = setInterval(async () => {
+                    try {
+                        const statusResponse = await fetch(`http://localhost:8080/api/ppt/async/status/${taskId}`);
+                        if (!statusResponse.ok) return;
+
+                        const task = await statusResponse.json();
+                        
+                        // 更新进度条
+                        const percent = task.percent || 0;
+                        progressBar.style.width = percent + '%';
+                        progressBar.innerText = percent + '%';
+                        
+                        // 更新日志
+                        if (task.logs && task.logs.length > 0) {
+                            // 简单的增量更新：清空重绘（日志量不大）或只追加新日志
+                            // 为了简单，我们只显示最后10条或者全部
+                            logsContent.innerHTML = task.logs.map(log => `<p>${log}</p>`).join('');
+                            logsContent.scrollTop = logsContent.scrollHeight; // 自动滚动到底部
+                            
+                            // 更新状态文本为最新一条日志
+                            statusText.innerText = task.logs[task.logs.length - 1];
+                        }
+
+                        // 检查状态
+                        if (task.status === 'COMPLETED') {
+                            clearInterval(pollInterval);
+                            handleCompletion(taskId);
+                        } else if (task.status === 'FAILED') {
+                            clearInterval(pollInterval);
+                            throw new Error(task.error || "任务执行失败");
+                        }
+                    } catch (err) {
+                        console.error("轮询出错:", err);
+                        // 不中断轮询，除非是严重错误
+                    }
+                }, 1000);
+
             } catch (err) {
+                handleError(err);
+            }
+
+            async function handleCompletion(id) {
+                progressBar.style.width = '100%';
+                progressBar.innerText = '100%';
+                statusText.innerText = '处理完成！正在下载视频...';
+                
+                try {
+                    const downloadResponse = await fetch(`http://localhost:8080/api/ppt/async/download/${id}`);
+                    
+                    if (downloadResponse.ok) {
+                        // 获取文件名
+                        let filename = 'video.mp4';
+                        const disposition = downloadResponse.headers.get('Content-Disposition');
+                        if (disposition && disposition.indexOf('attachment') !== -1) {
+                            const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
+                            const matches = filenameRegex.exec(disposition);
+                            if (matches != null && matches[1]) { 
+                                filename = decodeURIComponent(matches[1].replace(/['"]/g, ''));
+                            }
+                        }
+
+                        // 获取Blob数据
+                        const blob = await downloadResponse.blob();
+                        
+                        // 创建下载链接
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        
+                        // 清理
+                        window.URL.revokeObjectURL(url);
+                        document.body.removeChild(a);
+
+                        success.innerHTML = `
+                            <strong>✅ 视频生成成功！</strong><br><br>
+                            已自动开始下载 <strong>${filename}</strong><br>
+                            <small>如果下载没有开始，请检查浏览器拦截设置。</small>
+                        `;
+                        success.style.display = 'block';
+                    } else {
+                        throw new Error("下载失败");
+                    }
+                } catch (err) {
+                    handleError(err);
+                } finally {
+                    submitBtn.disabled = false;
+                }
+            }
+
+            function handleError(err) {
+                if (pollInterval) clearInterval(pollInterval);
                 error.innerHTML = `<strong>❌ 错误：</strong> ${err.message}`;
                 error.style.display = 'block';
-            } finally {
+                statusText.innerText = '发生错误';
                 submitBtn.disabled = false;
-                loading.style.display = 'none';
             }
         });
     </script>

@@ -30,45 +30,83 @@ public class PptToVideoService {
     private static final String TEMP_DIR = System.getProperty("user.dir") + File.separator + "temp" + File.separator + "ppt_video_temp";
 
     /**
-     * 将 PPT 文件转换为视频
+     * 将 PPT 文件转换为视频 (同步方法，保留向后兼容)
+     */
+    public String generateVideoFromPpt(MultipartFile file) throws IOException {
+        return generateVideoFromPpt(file, (percent, msg) -> log.info("进度 {}: {}", percent, msg));
+    }
+
+    /**
+     * 将 PPT 文件转换为视频 (支持进度回调)
      * 1. PPT 转图片 & 提取文本
      * 2. 文本转语音 (TTS)
      * 3. 合成视频 (图片 + 语音)
      */
-    public String generateVideoFromPpt(MultipartFile file) throws IOException {
-        long startTime = System.currentTimeMillis();
-        log.info("开始处理 PPT 转视频: {}", file.getOriginalFilename());
-
+    public String generateVideoFromPpt(MultipartFile file, java.util.function.BiConsumer<Integer, String> progressCallback) throws IOException {
+        String originalFilename = file.getOriginalFilename();
+        if (originalFilename == null) {
+            throw new IllegalArgumentException("文件名不能为空");
+        }
+        
         String taskId = UUID.randomUUID().toString();
         File taskDir = new File(TEMP_DIR, taskId);
         if (!taskDir.exists()) {
             taskDir.mkdirs();
         }
 
-        String originalFilename = file.getOriginalFilename();
-        if (originalFilename == null) {
-            throw new IllegalArgumentException("文件名不能为空");
-        }
         String extension = originalFilename.substring(originalFilename.lastIndexOf(".")).toLowerCase();
         File pptFile = new File(taskDir, "source" + extension);
         file.transferTo(pptFile);
 
+        return processPptFile(pptFile, originalFilename, progressCallback, taskId);
+    }
+
+    /**
+     * 核心处理逻辑，接受已存在的本地文件
+     */
+    public String generateVideoFromPptFile(File pptFile, String originalFilename, java.util.function.BiConsumer<Integer, String> progressCallback) throws IOException {
+        String taskId = UUID.randomUUID().toString();
+        // 如果文件不在我们的临时目录结构中，可能需要复制，或者直接使用
+        // 这里假设调用者已经准备好了文件，或者我们只需要读取它
+        // 为了复用逻辑，我们还是创建一个任务目录
+        File taskDir = new File(TEMP_DIR, taskId);
+        if (!taskDir.exists()) {
+            taskDir.mkdirs();
+        }
+        
+        // 复制源文件到任务目录 (避免修改源文件)
+        String extension = originalFilename.contains(".") ? originalFilename.substring(originalFilename.lastIndexOf(".")).toLowerCase() : ".pptx";
+        File targetPptFile = new File(taskDir, "source" + extension);
+        Files.copy(pptFile.toPath(), targetPptFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+
+        return processPptFile(targetPptFile, originalFilename, progressCallback, taskId);
+    }
+
+    private String processPptFile(File pptFile, String originalFilename, java.util.function.BiConsumer<Integer, String> progressCallback, String taskId) throws IOException {
+        long startTime = System.currentTimeMillis();
+        progressCallback.accept(0, "开始处理 PPT 转视频: " + originalFilename);
+        
+        File taskDir = pptFile.getParentFile(); // 假设 pptFile 已经在任务目录中
+
         try {
             // 1. PPT 转 PDF
+            progressCallback.accept(10, "正在将 PPT 转换为 PDF...");
             File pdfFile = new File(taskDir, "converted.pdf");
             pptService.convertPptToPdf(pptFile, pdfFile);
-            log.info("PPT 转 PDF 完成: {}", pdfFile.getAbsolutePath());
+            progressCallback.accept(30, "PPT 转 PDF 完成");
 
             // 2. 从 PPT 提取文本内容
+            progressCallback.accept(35, "正在提取 PPT 文本内容...");
             List<String> textContents = extractTextFromPpt(pptFile);
-            log.info("提取文本内容完成，共 {} 页", textContents.size());
+            progressCallback.accept(40, "提取文本内容完成，共 " + textContents.size() + " 页");
 
             // 3. PDF 转图片
+            progressCallback.accept(45, "正在将 PDF 转换为高清图片...");
             List<PptPage> pages = pptService.convertPdfToPages(pdfFile, taskDir, textContents);
             if (pages.isEmpty()) {
                 throw new IllegalArgumentException("PDF 转图片失败");
             }
-            log.info("PDF 转图片完成，共 {} 页", pages.size());
+            progressCallback.accept(60, "PDF 转图片完成，共 " + pages.size() + " 页");
 
             // 4. 准备临时目录存放音频
             File audioDir = new File(TEMP_DIR, UUID.randomUUID().toString());
@@ -77,13 +115,23 @@ public class PptToVideoService {
             }
 
             // 5. 为每页生成语音并构建 ImageSlide (并行处理)
-            log.info("开始并行处理 TTS 生成 (并发数: 5)...");
+            progressCallback.accept(65, "正在生成语音合成 (TTS)...");
             List<ImageSlide> slides;
             java.util.concurrent.ForkJoinPool customThreadPool = new java.util.concurrent.ForkJoinPool(5);
             try {
+                // 使用 AtomicInteger 追踪进度
+                java.util.concurrent.atomic.AtomicInteger processedCount = new java.util.concurrent.atomic.AtomicInteger(0);
+                int totalPages = pages.size();
+                
                 slides = customThreadPool.submit(() ->
                         pages.parallelStream()
-                                .map(page -> processPage(page, audioDir))
+                                .map(page -> {
+                                    List<ImageSlide> pageSlides = processPage(page, audioDir);
+                                    int current = processedCount.incrementAndGet();
+                                    int percent = 65 + (int)((current / (double)totalPages) * 20); // 65% -> 85%
+                                    progressCallback.accept(percent, "已处理第 " + page.getPageIndex() + " 页语音");
+                                    return pageSlides;
+                                })
                                 .flatMap(List::stream)
                                 .collect(java.util.stream.Collectors.toList())
                 ).get();
@@ -93,12 +141,13 @@ public class PptToVideoService {
             } finally {
                 customThreadPool.shutdown();
             }
+            progressCallback.accept(85, "语音合成完成，准备合成视频...");
 
             // 6. 生成视频
             String videoFilename = "video_" + System.currentTimeMillis() + ".mp4";
             String videoOutputPath = new File(audioDir, videoFilename).getAbsolutePath();
 
-            log.info("开始合成视频: {}", videoOutputPath);
+            progressCallback.accept(90, "正在合成最终视频 (FFmpeg)...");
             String result = imageToVideoService.createVideoWithAudio(slides, videoOutputPath);
 
             // 7. 清理临时 PDF 文件
@@ -108,8 +157,8 @@ public class PptToVideoService {
             
             long endTime = System.currentTimeMillis();
             long durationMs = endTime - startTime;
-            log.info("PPT 转视频处理完成: {}, 总耗时: {} ms (约 {} 秒)",
-                    file.getOriginalFilename(), durationMs, String.format("%.2f", durationMs / 1000.0));
+            String doneMsg = String.format("PPT 转视频处理完成，总耗时: %.2f 秒", durationMs / 1000.0);
+            progressCallback.accept(100, doneMsg);
 
             return result;
         } finally {

@@ -143,4 +143,117 @@ public class PptController {
             throw new RuntimeException("转换失败：" + e.getMessage(), e);
         }
     }
+
+    // --- 异步处理相关 ---
+
+    private final java.util.Map<String, TaskStatus> tasks = new java.util.concurrent.ConcurrentHashMap<>();
+
+    @lombok.Data
+    public static class TaskStatus {
+        private String taskId;
+        private volatile String status; // PROCESSING, COMPLETED, FAILED
+        private volatile int percent;
+        // Use CopyOnWriteArrayList to avoid ConcurrentModificationException during iteration (e.g. JSON serialization)
+        private final List<String> logs = new java.util.concurrent.CopyOnWriteArrayList<>();
+        private volatile String resultPath;
+        private volatile String error;
+
+        public TaskStatus(String taskId) {
+            this.taskId = taskId;
+            this.status = "PROCESSING";
+            this.percent = 0;
+        }
+
+        public void addLog(String log) {
+            this.logs.add(log);
+        }
+    }
+
+    @PostMapping("/async/to-video")
+    public ResponseEntity<java.util.Map<String, String>> uploadAsync(@RequestParam("file") MultipartFile file) {
+        String taskId = java.util.UUID.randomUUID().toString();
+        TaskStatus task = new TaskStatus(taskId);
+        tasks.put(taskId, task);
+
+        try {
+            // 保存临时文件供异步线程使用
+            String originalFilename = file.getOriginalFilename();
+            String extension = originalFilename != null && originalFilename.contains(".") ? originalFilename.substring(originalFilename.lastIndexOf(".")) : ".pptx";
+            java.io.File tempFile = java.io.File.createTempFile("upload_", extension);
+            file.transferTo(tempFile);
+
+            java.util.concurrent.CompletableFuture.runAsync(() -> {
+                try {
+                    String videoPath = pptToVideoService.generateVideoFromPptFile(tempFile, originalFilename, (percent, msg) -> {
+                        task.setPercent(percent);
+                        task.addLog(msg);
+                    });
+                    task.setResultPath(videoPath);
+                    task.setStatus("COMPLETED");
+                } catch (Exception e) {
+                    log.error("异步任务失败", e);
+                    task.setStatus("FAILED");
+                    task.setError(e.getMessage());
+                    task.addLog("错误: " + e.getMessage());
+                } finally {
+                    // 清理上传的临时文件
+                    if (tempFile.exists()) {
+                        tempFile.delete();
+                    }
+                }
+            });
+
+            java.util.Map<String, String> response = new java.util.HashMap<>();
+            response.put("taskId", taskId);
+            return ResponseEntity.ok(response);
+
+        } catch (IOException e) {
+            log.error("文件上传失败", e);
+            return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    @org.springframework.web.bind.annotation.GetMapping("/async/status/{taskId}")
+    public ResponseEntity<TaskStatus> getTaskStatus(@org.springframework.web.bind.annotation.PathVariable("taskId") String taskId) {
+        TaskStatus task = tasks.get(taskId);
+        if (task == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(task);
+    }
+
+    @org.springframework.web.bind.annotation.GetMapping("/async/download/{taskId}")
+    public ResponseEntity<org.springframework.core.io.Resource> downloadVideo(@org.springframework.web.bind.annotation.PathVariable("taskId") String taskId) {
+        log.info("收到视频下载请求: taskId={}", taskId);
+        TaskStatus task = tasks.get(taskId);
+        if (task == null) {
+            log.error("下载失败: 任务不存在 taskId={}", taskId);
+            return ResponseEntity.notFound().build();
+        }
+        if (!"COMPLETED".equals(task.getStatus())) {
+            log.error("下载失败: 任务未完成 status={}", task.getStatus());
+            return ResponseEntity.notFound().build();
+        }
+        if (task.getResultPath() == null) {
+            log.error("下载失败: 结果路径为空");
+            return ResponseEntity.notFound().build();
+        }
+
+        java.io.File videoFile = new java.io.File(task.getResultPath());
+        if (!videoFile.exists()) {
+            log.error("下载失败: 文件不存在 path={}", task.getResultPath());
+            return ResponseEntity.internalServerError().body(new ByteArrayResource(("视频生成失败: 文件不存在 " + task.getResultPath()).getBytes()));
+        }
+
+        org.springframework.core.io.Resource resource = new org.springframework.core.io.FileSystemResource(videoFile);
+        
+        String videoFilename = "video_" + taskId + ".mp4";
+        
+        log.info("开始下载视频: {}", videoFile.getAbsolutePath());
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + videoFilename + "\"")
+                .contentType(MediaType.parseMediaType("video/mp4"))
+                .contentLength(videoFile.length())
+                .body(resource);
+    }
 }
