@@ -29,6 +29,18 @@ public class PptToVideoService {
 
     private static final String TEMP_DIR = System.getProperty("user.dir") + File.separator + "temp" + File.separator + "ppt_video_temp";
 
+    static {
+        // 允许处理包含大量内部文件的 PPTX 文件
+        // 避免 "The file appears to be potentially malicious" 错误
+        try {
+            org.apache.poi.openxml4j.util.ZipSecureFile.setMinInflateRatio(0);
+            // 设置为 Integer.MAX_VALUE 而不是 -1，因为 -1 可能导致比较逻辑 (count > max) 总是为真
+            org.apache.poi.openxml4j.util.ZipSecureFile.setMaxFileCount(Integer.MAX_VALUE);
+        } catch (Throwable e) {
+            log.warn("配置 POI ZipSecureFile 失败", e);
+        }
+    }
+
     /**
      * 将 PPT 文件转换为视频 (同步方法，保留向后兼容)
      */
@@ -157,7 +169,11 @@ public class PptToVideoService {
             
             long endTime = System.currentTimeMillis();
             long durationMs = endTime - startTime;
-            String doneMsg = String.format("PPT 转视频处理完成，总耗时: %.2f 秒", durationMs / 1000.0);
+            long seconds = durationMs / 1000;
+            long h = seconds / 3600;
+            long m = (seconds % 3600) / 60;
+            long s = seconds % 60;
+            String doneMsg = String.format("PPT 转视频处理完成，总耗时: %d小时%d分%d秒", h, m, s);
             progressCallback.accept(100, doneMsg);
 
             return result;

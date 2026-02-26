@@ -163,23 +163,17 @@ public class ImageToVideoService {
             // 设置 CRF (Constant Rate Factor) 控制质量
              // 范围 0-51，数值越小质量越好，文件越大。18-28 是常用范围
              // 从 18 改为 23 (默认)：2.5K 分辨率下，CRF 23 依然能保持非常高的画质，且文件更小编码更快
-             recorder.setVideoOption("crf", "23");
+             // 降低 CRF 值，平衡画质和速度
+             // ultrafast 模式下，CRF 可以稍微调大一点点以减小文件体积，或者保持 23 -> 改为 25 以提升速度
+             recorder.setVideoOption("crf", "25");
              
              // 使用更快的预设以大幅缩短编码时间
-             // 从 medium 改为 fast：在保持良好压缩率的同时显著提升编码速度
-             recorder.setVideoOption("preset", "fast");
+             // 从 fast 改为 ultrafast：牺牲少量压缩率换取最快的编码速度
+             recorder.setVideoOption("preset", "ultrafast");
              
              // 启用多线程编码
              // 设置为 0 表示自动使用所有可用的 CPU 核心
              recorder.setVideoOption("threads", "0");
-             
-             // 尝试强制使用 High 4:4:4 Predictive Profile (如果兼容性允许)
-             // 这能保留完整的色度信息，解决文字边缘模糊问题
-             // 如果播放器不支持，可能需要回退到 high profile (4:2:0)
-             // 但为了极致画质，先尝试 high444
-             // recorder.setVideoOption("profile", "high444"); 
-             // 考虑到兼容性，还是使用 high profile，但通过超高码率弥补
-             recorder.setVideoOption("profile", "high");
 
             recorder.setAudioCodec(avcodec.AV_CODEC_ID_AAC);
             recorder.setSampleRate(44100);
@@ -187,8 +181,11 @@ public class ImageToVideoService {
             // 启动录制器
             recorder.start();
             
-            // 创建图像缩放/转换器（如果图片尺寸与视频尺寸不一致）
-            // 我们在循环中针对每张图片处理
+            // 记录当前录制的总时长（微秒），用于保证时间戳连续
+            long currentRecorderTimestamp = 0;
+            
+            // 重用转换器，避免每次循环都创建
+            org.bytedeco.javacv.Java2DFrameConverter converter = new org.bytedeco.javacv.Java2DFrameConverter();
 
             for (ImageSlide slide : slides) {
                 log.info("处理图片幻灯片: {}", slide.getImagePath());
@@ -198,6 +195,7 @@ public class ImageToVideoService {
                 int totalFrames = (int) (slide.getDuration() * 30);
                 long frameDurationUs = 1000000L / 30;
                 
+                // 处理图片部分
                 try (FFmpegFrameGrabber slideImageGrabber = new FFmpegFrameGrabber(slide.getImagePath())) {
                     slideImageGrabber.start();
                     
@@ -208,17 +206,13 @@ public class ImageToVideoService {
                         continue;
                     }
                     
-                    // 如果图片尺寸与视频尺寸不一致，需要缩放
-                    // 或者为了避免 Stride/Padding 问题，始终进行规范化处理
-                    org.bytedeco.javacv.Java2DFrameConverter converter = new org.bytedeco.javacv.Java2DFrameConverter();
+                    // 图片处理逻辑：缩放、填充背景等
+                    // 移除循环内重复创建 converter
+                    // org.bytedeco.javacv.Java2DFrameConverter converter = new org.bytedeco.javacv.Java2DFrameConverter();
                     java.awt.image.BufferedImage bufferedImage = converter.getBufferedImage(imageFrame);
                     
                     if (bufferedImage != null) {
                         // 创建一个新的 BufferedImage，尺寸与视频一致，类型为 BGR (兼容性好)
-                        // 这一步确保了：
-                        // 1. 尺寸严格匹配视频宽高
-                        // 2. 图像数据布局标准化 (避免 Stride 问题导致的画面错位/截断)
-                        // 3. 像素格式为 standard BGR
                         java.awt.image.BufferedImage normalizedImage = new java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_3BYTE_BGR);
                         java.awt.Graphics2D g2d = normalizedImage.createGraphics();
                         
@@ -239,17 +233,11 @@ public class ImageToVideoService {
                         double scaleX = (double) width / imgW;
                         double scaleY = (double) height / imgH;
                         
-                        // 如果尺寸完全一致（即使之前因为奇偶调整了+1像素，这里也是填充背景后 1:1 绘制）
-                        // 彻底消除缩放
+                        // 如果尺寸完全一致，居中绘制
                         if (imgW <= width && imgH <= height && 
                             Math.abs(width - imgW) <= 2 && Math.abs(height - imgH) <= 2) {
-                            
-                            // 居中绘制，不缩放
                             int x = (width - imgW) / 2;
                             int y = (height - imgH) / 2;
-                            
-                            // 使用最简单的绘制方法，避免任何插值
-                            g2d.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
                             g2d.drawImage(bufferedImage, x, y, null);
                         } else {
                             // 保持长宽比缩放
@@ -262,60 +250,70 @@ public class ImageToVideoService {
                         }
                         
                         g2d.dispose();
-                        
-                        // 替换原始帧
                         imageFrame = converter.convert(normalizedImage);
                     }
-
-                    // 准备音频抓取器
+                    
+                    // 预处理音频：将音频完全读取到内存或按需读取
                     FFmpegFrameGrabber audioGrabber = null;
                     if (slide.getAudioPath() != null && new File(slide.getAudioPath()).exists()) {
                         log.info("处理音频: {}", slide.getAudioPath());
                         audioGrabber = new FFmpegFrameGrabber(slide.getAudioPath());
                         audioGrabber.start();
                     }
-
-                    // 获取当前视频流的起始时间戳 (微秒)
-                    long startTimestamp = recorder.getTimestamp();
                     
-                    // 优化：设置音频同步间隔，避免逐帧处理音频带来的上下文切换开销
-                    // 每 15 帧 (约 0.5 秒) 同步一次音频，实现批量写入
-                    int audioSyncInterval = 15; 
-
-                    // 循环写入视频帧
+                    // 优化：不逐帧写入视频图像，而是使用 record(Frame, PixelFormat) 的变体或者直接调整时间戳
+                    // 对于静态图片，FFmpeg 支持 "VFR" (Variable Frame Rate)，但为了兼容性，通常还是固定帧率
+                    // 关键优化：不要在每一帧都调用 recorder.record(imageFrame) 进行完整的编码操作
+                    // 如果图像内容没有变化，可以使用 recorder.record(imageFrame) 但其实非常浪费
+                    // 更好的方法是：对于静态图片，我们只在关键帧或者每秒写入一次，其他时候让播放器保持上一帧？
+                    // 不，MP4 还是需要连续的帧。
+                    // 但是！我们可以显著减少 Java <-> Native 的调用开销。
+                    
+                    // 真正的优化：批量写入。但是 FFmpegFrameRecorder 没有批量 API。
+                    
+                    // 另一个优化点：音频和视频分开写入？不，必须交错。
+                    
+                    // 循环写入当前幻灯片的每一帧
                     for (int i = 0; i < totalFrames; i++) {
-                        // 计算当前帧的理论时间戳
-                        long currentFrameTimestamp = startTimestamp + (i * frameDurationUs);
+                        // 1. 写入视频帧
+                        // 计算这一帧在整个视频中的绝对时间戳
+                        long frameTimestamp = currentRecorderTimestamp + (i * frameDurationUs);
+                        recorder.setTimestamp(frameTimestamp);
                         
-                        // 1. 显式设置 recorder 时间戳，确保视频帧时间连续
-                        recorder.setTimestamp(currentFrameTimestamp);
+                        // 优化：对于静态图片，其实不需要每一帧都重新编码
+                        // 但 MP4 标准需要连续的帧。
+                        // 如果我们使用 VFR (Variable Frame Rate)，可以只写入关键帧和变化帧。
+                        // 但为了兼容性，我们保持 CFR (Constant Frame Rate)。
+                        // 
+                        // 在 ultrafast 模式下，对于完全相同的帧，x264 编码器会非常高效地处理（P-skip）。
+                        // 所以这里的性能瓶颈主要在于 record() 调用的开销和内存拷贝。
+                        // 
+                        // 如果 slide 持续时间很长（例如 10秒 = 300帧），我们可以尝试减少 recorder.record(imageFrame) 的频率？
+                        // 不行，那样会导致视频变短或者帧率不稳定。
+                        
                         recorder.record(imageFrame);
                         
-                        // 2. 写入音频帧 (批量交错写入)
-                        // 仅在特定间隔 或 最后一帧 时处理音频
-                        if (audioGrabber != null && (i % audioSyncInterval == 0 || i == totalFrames - 1)) {
+                        // 2. 写入音频帧
+                        // 只有当有音频时才处理
+                        if (audioGrabber != null) {
+                            // 尝试读取一帧或多帧音频，直到填满当前视频帧的时间间隙
                             Frame audioFrame;
-                            // 设定本次同步的目标时间戳：当前时间 + 同步间隔
-                            // 允许音频稍微超前一点，以保持缓冲区充盈
-                            long syncTargetTimestamp = currentFrameTimestamp + (audioSyncInterval * frameDurationUs);
-                            
-                            // 持续读取音频，直到追上目标时间戳
                             while ((audioFrame = audioGrabber.grabSamples()) != null) {
-                                // 重要：音频帧的时间戳是相对于该音频文件开头的
-                                // 必须加上当前幻灯片的起始时间戳，才能对齐到整个视频的时间轴
-                                long adjustedAudioTimestamp = startTimestamp + audioFrame.timestamp;
-                                audioFrame.timestamp = adjustedAudioTimestamp;
-                                
+                                // 重新设置音频帧的时间戳
+                                long audioAbsTimestamp = currentRecorderTimestamp + audioFrame.timestamp;
+                                recorder.setTimestamp(audioAbsTimestamp);
                                 recorder.record(audioFrame);
                                 
-                                // 如果当前音频帧的时间已经赶上了同步目标，暂停读取
-                                if (adjustedAudioTimestamp >= syncTargetTimestamp) {
+                                if (audioFrame.timestamp >= (i + 1) * frameDurationUs) {
                                     break;
                                 }
                             }
                         }
                     }
-
+                    
+                    // 更新全局时间戳，准备处理下一张幻灯片
+                    currentRecorderTimestamp += (totalFrames * frameDurationUs);
+                    
                     if (audioGrabber != null) {
                         try {
                             audioGrabber.stop();
@@ -324,6 +322,7 @@ public class ImageToVideoService {
                             log.warn("关闭音频抓取器失败", e);
                         }
                     }
+                    
                 } catch (Exception e) {
                     log.error("处理幻灯片失败: {}", slide.getImagePath(), e);
                 }

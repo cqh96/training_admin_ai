@@ -35,7 +35,7 @@ public class SecurityConfig {
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/auth/**", "/actuator/**", "/ffmpeg/**", "/image-to-video/**", "/ppt/**", "/file-parsing/**").permitAll()
+                        .requestMatchers("/auth/**", "/actuator/**", "/ffmpeg/**", "/image-to-video/**", "/ppt/**", "/file-parsing/**", "/*.html", "/favicon.ico", "/css/**", "/js/**").permitAll()
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

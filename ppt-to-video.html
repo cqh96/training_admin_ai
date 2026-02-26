@@ -179,7 +179,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>🎬 PPT转视频工具</h1>
+        <h1>🎬 AI-学习屋PPT转视频工具</h1>
         
         <form id="pptForm">
             <div class="form-group">
@@ -250,7 +250,7 @@
                 const formData = new FormData();
                 formData.append('file', fileInput.files[0]);
 
-                const uploadResponse = await fetch('http://localhost:8080/api/ppt/async/to-video', {
+                const uploadResponse = await fetch('/api/ppt/async/to-video', {
                     method: 'POST',
                     body: formData
                 });
@@ -267,7 +267,7 @@
                 // 2. 轮询进度
                 pollInterval = setInterval(async () => {
                     try {
-                        const statusResponse = await fetch(`http://localhost:8080/api/ppt/async/status/${taskId}`);
+                        const statusResponse = await fetch(`/api/ppt/async/status/${taskId}`);
                         if (!statusResponse.ok) return;
 
                         const task = await statusResponse.json();
@@ -312,7 +312,7 @@
                 statusText.innerText = '处理完成！正在下载视频...';
                 
                 try {
-                    const downloadResponse = await fetch(`http://localhost:8080/api/ppt/async/download/${id}`);
+                    const downloadResponse = await fetch(`/api/ppt/async/download/${id}`);
                     
                     if (downloadResponse.ok) {
                         // 获取文件名
